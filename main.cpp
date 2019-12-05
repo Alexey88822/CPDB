@@ -5,8 +5,14 @@
 #include <sql.h>
 #include <sqlext.h>
 #include <string>
+#include <sstream>
+#include <vector>
 using namespace std;
-// CREATE TABLE Notepad(id serial PRIMARY KEY, type text, location text, ipaddress text, macaddress text, supportedservices text);
+// SELECT sysbook.id, type_table.type, sysbook.location, sysbook.ipaddress, sysbook.macaddress, services_table.service from sysbook, type_table, services_table, hardware_services_table WHERE sysbook.type_id=type_table.id AND hardware_services_table.id_service=services_table.id AND sysbook.id=hardware_services_table.id_hardware;
+// CREATE TABLE sysbook(id SERIAL PRIMARY KEY, type_id integer references type_table(id), location text, ipaddress text, macaddress text);
+// CREATE TABLE type_table(id SERIAL PRIMARY KEY, type text);
+// CREATE TABLE services_table(id SERIAL PRIMARY KEY, service text);
+// CREATE TABLE hardware_services_table(id SERIAL PRIMARY KEY, id_service integer references services_table(id), id_hardware integer references sysbook(id) ON DELETE CASCADE);
 #define SQL_HANDLE_ENV 1
 #define SQL_HANDLE_DBC 2
 #define SQL_HANDLE_STMT 3
@@ -17,8 +23,9 @@ SQLHSTMT varSelect;
 SQLHSTMT varInsert;
 SQLHSTMT varDelete;
 SQLHSTMT varUpdate;
-SQLCHAR selecttxt[] = "SELECT * FROM Notepad;";
-SQLCHAR deletetxt[] = "DELETE FROM Notepad WHERE ipaddress=?;";
+SQLHSTMT varCreate;
+SQLCHAR selecttxt[] = "SELECT sysbook.id, type_table.type, sysbook.location, sysbook.ipaddress, sysbook.macaddress, services_table.service from sysbook, type_table, services_table, hardware_services_table WHERE sysbook.type_id=type_table.id AND hardware_services_table.id_service=services_table.id AND sysbook.id=hardware_services_table.id_hardware;";
+SQLCHAR deletetxt[] = "DELETE FROM sysbook WHERE id=?;";
 SQLSCHAR sqf2[50], sqf3[50], sqf4[50], sqf5[50], sqf6[70];
 SQLLEN sqf1,sbf1,sbf2,sbf3,sbf4,sbf5,sbf6;
 
@@ -45,7 +52,41 @@ void checkAnswer(int code) {
     }
 }
 
-int initConnection(char* UserName, SQLCHAR Password[]) {
+void checkTables() { // Проверка существования таблиц
+    SQLRETURN code;
+    code = SQLAllocHandle(SQL_HANDLE_STMT, hdbcOutput, &varCreate);
+    checkAnswer(code);
+    code = SQLExecDirect(varCreate, (SQLCHAR*)"CREATE TABLE sysbook(id SERIAL PRIMARY KEY, type_id integer references type_table(id), location text, ipaddress text, macaddress text);", SQL_NTS);
+    if (code==0) {
+        std::cout << "Table sysbook was create" << endl;
+    }
+    else {
+        checkDescriptor(outputEnv, hdbcOutput, varCreate);
+    }
+    code = SQLExecDirect(varCreate, (SQLCHAR*)"CREATE TABLE type_table(id SERIAL PRIMARY KEY, type text);", SQL_NTS);
+    if (code==0) {
+        std::cout << "Table type_table was create" << endl;
+    }
+    else {
+        checkDescriptor(outputEnv, hdbcOutput, varCreate);
+    }
+    code = SQLExecDirect(varCreate, (SQLCHAR*)"CREATE TABLE services_table(id SERIAL PRIMARY KEY, service text);", SQL_NTS);
+    if (code==0) {
+        std::cout << "Table services_table was create" << endl;
+    }
+    else {
+        checkDescriptor(outputEnv, hdbcOutput, varCreate);
+    }
+    code = SQLExecDirect(varCreate, (SQLCHAR*)"CREATE TABLE hardware_services_table(id SERIAL PRIMARY KEY, id_service integer references services_table(id), id_hardware integer references sysbook(id) ON DELETE CASCADE);", SQL_NTS);
+    if (code==0) {
+        std::cout << "Table hardware_services_table was create" << endl;
+    }
+    else {
+        checkDescriptor(outputEnv, hdbcOutput, varCreate);
+    }
+}
+
+int initConnection(char* UserName, SQLCHAR Password[]) { // Установка соединения с базой данных
     setlocale(LC_ALL, "Russian");
     std::cout << "Connecting..." << std::endl;
     printf("ODBC Version: %04X,%04X\n",ODBCVER,0x0300);
@@ -78,9 +119,9 @@ int Update() { // Обновление данных в таблице
     SQLCHAR second[50];
     cout << "IP Address of equipment: " << endl;
     cin >> second;
-    cout << "Type of equipment(update): " << endl;
+    cout << "Type of equipment(1 - PC, 2 - Laptop, 3 - Phone, 4 - Server): " << endl;
     cin >> first;
-    SQLPrepare(varUpdate, (SQLCHAR*)"UPDATE Notepad SET type=? WHERE ipaddress=?", SQL_NTS);
+    SQLPrepare(varUpdate, (SQLCHAR*)"UPDATE sysbook SET type_id=? WHERE ipaddress=?", SQL_NTS);
     SQLBindParameter(varUpdate, 1, SQL_PARAM_INPUT,
                      SQL_C_CHAR, SQL_CHAR,
                      0, 0,
@@ -100,6 +141,10 @@ int Update() { // Обновление данных в таблице
     }
 }
 
+enum {
+    OPERATION_SELECT = 1,
+};
+
 int getData(int Operation, SQLSCHAR Parametr[]) { // Operation: 1 - SELECT; 2 - SearchType, 3 - SearchIP, 4 - SearchMAC
     SQLRETURN code;
     code = SQLAllocHandle(SQL_HANDLE_STMT, hdbcOutput, &varSelect);
@@ -114,7 +159,7 @@ int getData(int Operation, SQLSCHAR Parametr[]) { // Operation: 1 - SELECT; 2 - 
             if (retcode == 100) {
                 std::cout << "No data available." << std::endl;
             }
-            if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {/* Извлечение данных трех полей результирующего набора */
+            if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {/* Извлечение данных результирующего набора */
                 SQLGetData(varSelect, 1, SQL_C_ULONG, &sqf1, 0, &sbf1);
                 SQLGetData(varSelect, 2, SQL_C_CHAR, sqf2, 50, &sbf2);
                 SQLGetData(varSelect, 3, SQL_C_CHAR, sqf3, 50, &sbf3);
@@ -126,19 +171,25 @@ int getData(int Operation, SQLSCHAR Parametr[]) { // Operation: 1 - SELECT; 2 - 
                               << sqf4 << "   MACADDRESS: " << sqf5 << "   SUPPORTEDSERVICES: " << sqf6 << std::endl;
                 }
                 if (Operation == 2) { // Searching by Type
-                    if (!strcmp((char*)Parametr, (char*)sqf2)) {
+                    string type = (string)((char*)sqf2);
+                    string parametr = (string)(char*)Parametr;
+                    if (type.find(parametr)!=-1) {
                         std::cout << "ID: " << sqf1 << "   TYPE: " << sqf2 << "  LOCATION: " << sqf3 << "   IPADDRESS: "
                                   << sqf4 << "   MACADDRESS: " << sqf5 << "   SUPPORTEDSERVICES: " << sqf6 << std::endl;
                     }
                 }
                 if (Operation == 3) { // Searching IP-Address
-                    if (!strcmp((char*)Parametr, (char*)sqf4)) {
+                    string ipaddress = (string)((char*)sqf4);
+                    string parametr = (string)(char*)Parametr;
+                    if (ipaddress.find(parametr)!=-1) {
                         std::cout << "ID: " << sqf1 << "   TYPE: " << sqf2 << "  LOCATION: " << sqf3 << "   IPADDRESS: "
                                   << sqf4 << "   MACADDRESS: " << sqf5 << "   SUPPORTEDSERVICES: " << sqf6 << std::endl;
                     }
                 }
                 if (Operation == 4) { // Searching MAC-Address
-                    if (!strcmp((char*)Parametr, (char*)sqf5)) {
+                    string macaddress = (string)((char*)sqf5);
+                    string parametr = (string)(char*)Parametr;
+                    if (macaddress.find(parametr)!=-1) {
                         std::cout << "ID: " << sqf1 << "   TYPE: " << sqf2 << "  LOCATION: " << sqf3 << "   IPADDRESS: "
                                   << sqf4 << "   MACADDRESS: " << sqf5 << "   SUPPORTEDSERVICES: " << sqf6 << std::endl;
                     }
@@ -160,13 +211,14 @@ int getData(int Operation, SQLSCHAR Parametr[]) { // Operation: 1 - SELECT; 2 - 
 }
 
 int insertToTable() { // Добавление данных в таблицу
+    SQLSCHAR idEquipment[50];
     SQLRETURN retcode;
     retcode = SQLAllocHandle(SQL_HANDLE_STMT, hdbcOutput, &varInsert);
     checkAnswer(retcode);
     if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
         SQLCHAR sF1_ID[50], sF2_ID[50], sF3_ID[50], sF4_ID[50], sF5_ID[50];
-        SQLPrepare(varInsert, (SQLCHAR*)"INSERT INTO Notepad(type, location, ipaddress, macaddress, supportedservices) VALUES(?, ?, ?, ?, ?);", SQL_NTS);
-        cout << "Type: ";
+        SQLPrepare(varInsert, (SQLCHAR*)"INSERT INTO sysbook(type_id, location, ipaddress, macaddress) VALUES(?, ?, ?, ?);", SQL_NTS);
+        cout << "Type(1-PC, 2-Laptop, 3-Phone, 4-Server): ";
         cin >> sF1_ID;
         cout << "Location: ";
         cin >> sF2_ID;
@@ -174,8 +226,17 @@ int insertToTable() { // Добавление данных в таблицу
         cin >> sF3_ID;
         cout << "MAC-Address: ";
         cin >> sF4_ID;
-        cout << "Services (ftp/telnet...): ";
+        cout << "Service(1-ftp, 2-telnet, 3-ssh, 4-snmp, 5-cifs): ";
         cin >> sF5_ID;
+        const char delim = ',';
+        string supportedservices = (string)((char*)sF5_ID);
+        std::vector<std::string> elems;
+        std::stringstream ss(supportedservices);
+        std::string item;
+        while(std::getline(ss, item, delim))
+        {
+            elems.push_back(item);
+        }
         SQLBindParameter(varInsert, 1, SQL_PARAM_INPUT,
                                    SQL_C_CHAR, SQL_CHAR,
                                    0, 0,
@@ -192,12 +253,72 @@ int insertToTable() { // Добавление данных в таблицу
                                    SQL_C_CHAR, SQL_CHAR,
                                    0, 0,
                                    sF4_ID, 0, NULL);
-        SQLBindParameter(varInsert, 5, SQL_PARAM_INPUT,
-                                   SQL_C_CHAR, SQL_CHAR,
-                                   0, 0,
-                                   sF5_ID, 0, NULL);
         retcode = SQLExecute(varInsert);
         if (retcode == 0) {
+            SQLRETURN code;
+            code = SQLAllocHandle(SQL_HANDLE_STMT, hdbcOutput, &varSelect);
+            checkAnswer(code);
+            SQLPrepare(varSelect, (SQLCHAR*)"SELECT id FROM sysbook WHERE type_id=? AND location=? AND ipaddress=? AND macaddress=?;", SQL_NTS);
+            SQLBindParameter(varSelect, 1, SQL_PARAM_INPUT,
+                             SQL_C_CHAR, SQL_CHAR,
+                             0, 0,
+                             &sF1_ID, 0, NULL);
+            SQLBindParameter(varSelect, 2, SQL_PARAM_INPUT,
+                             SQL_C_CHAR, SQL_CHAR,
+                             0, 0,
+                             &sF2_ID, 0, NULL);
+            SQLBindParameter(varSelect, 3, SQL_PARAM_INPUT,
+                             SQL_C_CHAR, SQL_CHAR,
+                             0, 0,
+                             &sF3_ID, 0, NULL);
+            SQLBindParameter(varSelect, 4, SQL_PARAM_INPUT,
+                             SQL_C_CHAR, SQL_CHAR,
+                             0, 0,
+                             &sF4_ID, 0, NULL);
+            code = SQLExecute(varSelect);
+            if (code == 0) {
+                    SQLRETURN retcode = SQLFetch(varSelect);
+                    if (retcode == SQL_ERROR || retcode == SQL_SUCCESS_WITH_INFO) {
+                        std::cout << "Error!" << std::endl;
+                    }
+                    if (retcode == 100) {
+                        std::cout << "No data available." << std::endl;
+                    }
+                    if (retcode == SQL_SUCCESS ||
+                        retcode == SQL_SUCCESS_WITH_INFO) {
+                            SQLGetData(varSelect, 1, SQL_C_CHAR, idEquipment, 50, &sbf1);
+                            std::cout << "ID of equipment: " << idEquipment << endl;
+                            int countOfElements = elems.size();
+                            for(int i = 0; i<countOfElements; i++) {
+                                std::string elementVector = elems.back();
+                                elems.pop_back();
+                                SQLCHAR* idService = (SQLCHAR *)elementVector.c_str();
+                                SQLPrepare(varInsert,
+                                           (SQLCHAR *) "INSERT INTO hardware_services_table(id_service, id_hardware) VALUES(?, ?);",
+                                           SQL_NTS);
+                                SQLBindParameter(varInsert, 1, SQL_PARAM_INPUT,
+                                                 SQL_C_CHAR, SQL_CHAR,
+                                                 0, 0,
+                                                 idService, 0, NULL);
+                                SQLBindParameter(varInsert, 2, SQL_PARAM_INPUT,
+                                                 SQL_C_CHAR, SQL_CHAR,
+                                                 0, 0,
+                                                 idEquipment, 0, NULL);
+                                retcode = SQLExecute(varInsert);
+                                if (retcode == 0) {
+                                    std::cout << "{INSERTTOTABLE} - Successfull insert to hardware_services_table!"
+                                              << std::endl;
+                                } else {
+                                    checkAnswer(retcode);
+                                    checkDescriptor(outputEnv, hdbcOutput, varInsert);
+                                }
+                            }
+                    }
+            }
+            else {
+                checkAnswer(retcode);
+                checkDescriptor(outputEnv, hdbcOutput, varSelect);
+            }
             std::cout << "{INSERTTOTABLE} - Successfull insert!" << std::endl;
         }
         else {
@@ -214,7 +335,7 @@ int deleteFromTable() { // Удаление данных из таблицы
     SQLCHAR first[50];
     retcode = SQLAllocHandle(SQL_HANDLE_STMT, hdbcOutput, &varDelete);
     checkAnswer(retcode);
-    cout << "Input ipaddress for delete: ";
+    cout << "Input ID of Equipment for delete: ";
     cin >> first;
     SQLPrepare(varDelete, deletetxt, SQL_NTS);
     SQLBindParameter(varDelete, 1, SQL_PARAM_INPUT,
@@ -257,6 +378,7 @@ int main(int argc, char* argv[]) {
     int i;
     int retcode = initConnection(userName, password);
     if (retcode == 0) {
+        checkTables();
         std::cout << "Operations:" << std::endl;
         std::cout << "1. Update " << std::endl;
         std::cout << "2. Insert into table " << std::endl;
